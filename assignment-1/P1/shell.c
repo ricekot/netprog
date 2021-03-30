@@ -13,7 +13,6 @@
 #include <limits.h>
 #include <assert.h>
 #include <ctype.h>
-#include <termios.h>
 
 #define RL_BUFSIZE 1024
 #define TOK_BUFSIZE 64
@@ -24,7 +23,10 @@ char **parse_input(char *, int *);
 char *read_line(void);
 int shell_execute(int, char **, int, int);
 int shell_run(int, char **);
-void run_shortcut(int);
+void sighandler(int);
+
+sig_atomic_t shortcut_mode_enabled = 0;
+char *shortcuts[10];
 
 // Main function
 int main(int argc, char **argv) {
@@ -46,9 +48,8 @@ int main(int argc, char **argv) {
 	char *line;
 	char **input_argv;
 	int status;
-
 	// sighandler for shortcut commands
-	signal(SIGINT, run_shortcut);
+	signal(SIGINT, sighandler);
 
 	do {
 		char cwd[PATH_MAX];
@@ -64,12 +65,30 @@ int main(int argc, char **argv) {
 			printf("\nExiting shell: EOF supplied.\n");
 			return 0;
 		}
-		int input_argc = 0;
-		input_argv = parse_input(line, &input_argc);
-		status = shell_run(input_argc, input_argv);
+		if (shortcut_mode_enabled) {
+			char c = line[0];
+			int index = c - '0';
+			if (index < 0 || index > 9) {
+				printf("sc: invalid index %c\n", c);
+			}
+			else if (shortcuts[index] == NULL) {
+				printf("sc: no command at index %c\n", c);
+			}
+			else {
+				char *argv[1];
+				argv[0] = shortcuts[index];
+				shell_run(1, argv);
+			}
+			shortcut_mode_enabled = 0;
+		}
+		else {
+			int input_argc = 0;
+			input_argv = parse_input(line, &input_argc);
+			status = shell_run(input_argc, input_argv);
+			free(input_argv);
+		}
 
 		free(line);
-		free(input_argv);
 	}
 	while (status);
 
@@ -317,7 +336,7 @@ int shell_recur(int argc, char **argv, int in, int out) {
 
 // Convenience Function
 int shell_run(int argc, char **argv) {
-	shell_recur(argc, argv, -1, -1);
+	return shell_recur(argc, argv, -1, -1);
 }
 
 // Executes parsed input
@@ -434,8 +453,6 @@ int shell_cd(char **args) {
 	return 1;
 }
 
-char *shortcuts[10];
-
 // Shortcut commands
 int shell_sc(char **argv){
 	if (argv[1] == NULL || argv[2] == NULL || argv[3] == NULL) {
@@ -460,32 +477,12 @@ int shell_sc(char **argv){
 	return 1;
 }
 
-void run_shortcut(int signum) {
+void sighandler(int signum) {
     switch(signum){
         case SIGINT:
-			printf("\n[SHORTCUT MODE] Enter a shortcut (0 - 9): [");
-			static struct termios oldt, newt;
-			tcgetattr(STDIN_FILENO, &oldt);
-			newt = oldt;
-			// Get input without newline or EOF
-			newt.c_lflag &= ~(ICANON);
-			tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-			int c = getchar();
-			tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-			printf("]\n");
-			int index = c - '0';
-			if (index < 0 || index > 9) {
-				printf("\nsc: invalid index %c\n", c);
-				scanf("\n\n");
-			}
-			else if (shortcuts[index] == NULL) {
-				printf("\nsc: no command at index %c\n", c);
-			}
-			else {
-				char *argv[1];
-				argv[0] = shortcuts[index];
-				shell_run(1, argv);
-			}
+			shortcut_mode_enabled = 1;
+			printf("\n[SHORTCUT MODE] Enter a shortcut (0 - 9): ");
+			fflush(stdout);
 			break;
     }
 }
